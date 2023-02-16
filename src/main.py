@@ -38,6 +38,16 @@ def evaluate(net, criterion, dataloader, args):
 def train(net, criterion, opti, train_loader, val_loader, args):
 
     best_acc = 0
+    # torch profiler
+    prof = torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/BERT'),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+    )
+
+    prof.start()
     for ep in range(args.max_eps):
         
         for it, (seq, attn_masks, labels) in enumerate(train_loader):
@@ -58,9 +68,16 @@ def train(net, criterion, opti, train_loader, val_loader, args):
             #Optimization step
             opti.step()
 
+            prof.step()
+
             if it % args.print_every == 0:
-                acc = get_accuracy_from_logits(logits, labels)
-                print("Iteration {} of epoch {} complete. Loss : {} Accuracy : {}".format(it, ep, loss.item(), acc))
+                val_acc, val_loss = evaluate(net, criterion, val_loader, args)
+                if val_acc > args.target_accuracy:
+                    print("Target accuracy reached! Stopping training...")
+                    prof.stop()
+                    return
+                print("Iteration {} of epoch {} complete. Loss : {} Accuracy : {}".format(it, ep, val_loss, val_acc))
+
 
         
         val_acc, val_loss = evaluate(net, criterion, val_loader, args)
@@ -69,7 +86,7 @@ def train(net, criterion, opti, train_loader, val_loader, args):
             print("Best validation accuracy improved from {} to {}, saving model...".format(best_acc, val_acc))
             best_acc = val_acc
             torch.save(net.state_dict(), 'Models/sstcls_{}_freeze_{}.dat'.format(ep, args.freeze_bert))
-    
+    prof.stop()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -80,6 +97,7 @@ if __name__ == "__main__":
     parser.add_argument('-lr', type = float, default = 2e-5)
     parser.add_argument('-print_every', type = int, default= 100)
     parser.add_argument('-max_eps', type = int, default= 5)
+    parser.add_argument('-target_accuracy', type = float, default= 0.8)
     args = parser.parse_args()
 
     #Instantiating the classifier model
